@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script>
+        function checkform() {
+            var request = new XMLHttpRequest();
+            request.open('GET', '/fileexists', false);  // `false` makes the request synchronous
+            request.send(null);
+
+            if (request.status === 200) {
+                if (request.responseText === 'True') {
+                    alert("A file with the same name already exists!");
+                }
+                else {
+                    return document.frm.submit();
+                }
+            }
+            else {
+                alert("Error When uploading. Please try again");
+            }
+        }
+    </script>
+    <meta charset="utf-8">
+    <title>Upload File</title>
+    <link rel="stylesheet" href="list.css"/>
+    <style>
+        h1 {
+            text-align: center;
+        }
+
+        .container {
+            text-align: center;
+            width: 80%;
+            height: 100%;
+            display: flex;
+            margin: 0 auto;
+        }
+
+        .fileslistdiv {
+            text-align: left;
+            width: 50%;
+            float: left;
+            overflow: scroll;
+        }
+
+        .formdiv {
+            clear: right;
+            width: 50%;
+            border-left: 1px solid black;
+            height: auto;
+        }
+
+    </style>
+</head>
+<body>
+<!-- List of uploaded documents -->
+<h1>Map browser</h1>
+<div class="container">
+
+
+    <div class="fileslistdiv">
+        <h2>List of uploaded docs</h2>
+        {% if documents %}
+        <ul>
+            {% for document in documents %}
+            <li><a href="{{ document.docfile.url }}">Download {{ document.file_name }} &#8595;</a></li>
+            <li><a href="/map/leaflet?file={{ document.file_name }}">View {{ document.file_name }} as
+                map</a></li>
+            <hr>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p>No documents.</p>
+        {% endif %}
+    </div>
+    <div class="formdiv">
+        <!-- Upload form. Note enctype attribute! -->
+        <form onsubmit="return checkform()" action="{% url 'index' %}" method="post" enctype="multipart/form-data"
+              name="frm">
+            {% csrf_token %}
+            <p>{{ form.non_field_errors }}</p>
+            <p>{{ form.docfile.label_tag }} {{ form.docfile.help_text }}</p>
+            <p>
+                {{ form.docfile.errors }}
+                {{ form.docfile }}
+            </p>
+            <p><input type="submit" value="Upload"/></p>
+        </form>
+    </div>
+</div>
+</body>
+</html>
