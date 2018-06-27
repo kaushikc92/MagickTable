@@ -14,6 +14,7 @@ from django.utils.cache import add_never_cache_headers
 from convertoimg.converttoimg import slice_image
 from tiler.models.Document import TiledDocument
 import pdb
+import time
 
 def index(request):
     return HttpResponse("Index page of tiler")
@@ -60,12 +61,14 @@ def tile_request(request, id, z, x, y):
     #return empty_response()
     # if int(z) < 0 or int(z) > 10:
     #     return empty_response()
-    x = int(x) - start_x.get(z)
-    y = int(y) - start_y.get(z)
+    #x = int(x) - start_x.get(z)
+    #y = int(y) - start_y.get(z)
+    x = int(x)
+    y = int(y)
     if x < 0 or y < 0:
         return empty_response()
-    x = int(math.fabs(x))
-    y = int(math.fabs(y))
+    #x = int(math.fabs(x))
+    #y = int(math.fabs(y))
 
     tiled_document = TiledDocument.objects.get(document__file_name=file_name, zoom_level=z)
     i = coordinate(x, y, tiled_document.tile_count_on_x)
@@ -112,86 +115,31 @@ def get_style_for_zoom_level(zoom_level):
              'props': [('text-align', 'center'), ('font-family', 'Times New Roman'), ('font-size', str(font_size))]}]
 
 
-def convert_subtable_html(df, csv_name, subtable_number, zoom_level, starting_tile_number=0):
+def convert_subtable_html(df, csv_name, subtable_number, starting_tile_number=0):
     pd.set_option('max_colwidth', 40)
     df = df.astype(str).apply(lambda x: x.str[:max_chars_per_column])
     html = df.style.set_table_styles(get_style_for_zoom_level(10)).render()
     tile_count = starting_tile_number
-    imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", str(zoom_level),
-                                          csv_name + str(subtable_number) + '.jpg'))
-    number_of_cols, number_of_rows, tile_count = slice_image(csv_name, os.path.join(settings.MEDIA_ROOT, "documents",
-                                                                                    str(zoom_level),
-                                                                                    csv_name + str(
-                                                                                        subtable_number) + '.jpg'),
-                                                             tile_count, zoom_level)
-    print("zoom level " + str(zoom_level))
-    tiled_document = TiledDocument.objects.get(document__file_name=csv_name, zoom_level=zoom_level)
-    tiled_document.tile_count_on_y = F('tile_count_on_y') + number_of_rows
-    tiled_document.zoom_level = zoom_level
-    if tiled_document.tile_count_on_x == 0:
+    imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg'))
+
+    for zoom_level in range(6,11):
+        number_of_cols, number_of_rows, tile_count = slice_image(csv_name, os.path.join(settings.MEDIA_ROOT, "documents",
+                                                        csv_name + str(subtable_number) + '.jpg'), zoom_level)
+        tiled_document = TiledDocument.objects.get(document__file_name=csv_name, zoom_level=zoom_level)
+        tiled_document.tile_count_on_y = number_of_rows
+        tiled_document.zoom_level = zoom_level
         tiled_document.tile_count_on_x = number_of_cols
-    tiled_document.total_tile_count = F('total_tile_count') + tile_count
-    tiled_document.save()
-
-    return number_of_cols, number_of_rows, tile_count
-
+        tiled_document.total_tile_count = tile_count
+        tiled_document.save()
 
 def convert_html(document, csv_name):
-    csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
-    total_row_count = csv.shape[0]
-    x = 0
-    tiled_document = TiledDocument(document=document, tile_count_on_x=0, tile_count_on_y=0,
-                                   total_tile_count=0, profile_file_name=csv_name[:-4] + ".html", zoom_level=10)
-    tiled_document.save()
-    df = csv[x:x + rows_per_image]
-    # convert the first set to get a count of the tiles per set
-    number_of_cols, number_of_rows, tile_count = convert_subtable_html(df, csv_name, subtable_number=0,
-                                                                       starting_tile_number=0, zoom_level=10)
-    number_of_subtables = math.ceil(total_row_count / rows_per_image)
-
-    thread_pool = multiprocessing.Pool(processes=multiprocessing_limit)
-
-    # start from 1 because we already did the first set
-    for subtable_number in range(1, number_of_subtables):
-        df = csv[subtable_number * rows_per_image: (subtable_number * rows_per_image) + rows_per_image]
-        thread_pool.apply_async(convert_subtable_html,
-                                args=(df, csv_name, subtable_number, 10, tile_count * subtable_number))
-
-    profile_df = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
-    profile = pf.ProfileReport(profile_df)
-    profile_output_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name[:-4] + "_profile.html")
-    profile.to_file(outputfile=profile_output_path)
-
-    for i in range(1, 10):
-        convert_html_2(document, csv_name, zoom_level=i)
-
-
-def convert_html_2(document, csv_name, zoom_level):
-    csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
-    total_row_count = csv.shape[0]
-    x = 0
-    tiled_document = TiledDocument(document=document, tile_count_on_x=0, tile_count_on_y=0,
+    df = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
+    for zoom_level in range(6,11):
+        tiled_document = TiledDocument(document=document, tile_count_on_x=0, tile_count_on_y=0,
                                    total_tile_count=0, profile_file_name=csv_name[:-4] + ".html", zoom_level=zoom_level)
-    tiled_document.save()
-    df = csv[x:x + rows_per_image]
+        tiled_document.save()
     # convert the first set to get a count of the tiles per set
-    number_of_cols, number_of_rows, tile_count = convert_subtable_html(df, csv_name, subtable_number=0,
-                                                                       starting_tile_number=0, zoom_level=zoom_level)
-    number_of_subtables = math.ceil(total_row_count / rows_per_image)
-
-    thread_pool = multiprocessing.Pool(processes=multiprocessing_limit)
-
-    # start from 1 because we already did the first set
-    for subtable_number in range(1, number_of_subtables):
-        df = csv[subtable_number * rows_per_image: (subtable_number * rows_per_image) + rows_per_image]
-        thread_pool.apply_async(convert_subtable_html,
-                                args=(df, csv_name, subtable_number, zoom_level, tile_count * subtable_number))
-
-    profile_df = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
-    profile = pf.ProfileReport(profile_df)
-    profile_output_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name[:-4] + "_profile.html")
-    profile.to_file(outputfile=profile_output_path)
-
+    convert_subtable_html(df, csv_name, subtable_number=0, starting_tile_number=0)
 
 def empty_response():
     red = Image.new('RGBA', (1, 1), (255, 0, 0, 0))

@@ -53,11 +53,19 @@
 <div id="mapid"></div>
 <script>
 
-    var mymap = L.map('mapid').setView([-0.06, 0.095], 13);
+    var mymap = L.map('mapid',{
+        crs: L.CRS.Simple
+    });
+
+    var center = mymap.unproject([550, 350], 13);
+    //var center = mymap.unproject([550, 350], 13);
+    
+    mymap.setView(center, 13);
 
     L.tileLayer('http://127.0.0.1:8000/tiler/v4/{id}/{z}/{x}/{y}?file={{ file }}', {
-        maxZoom: 18,
-        id: 'mapbox.streets'
+        maxZoom: 13,
+        minZoom: 1,
+        id: 'mapbox.streets',
     }).addTo(mymap);
 
     var popup = L.popup();
