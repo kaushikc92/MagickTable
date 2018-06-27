@@ -62,7 +62,7 @@
     
     mymap.setView(center, 13);
 
-    L.tileLayer('http://127.0.0.1:8000/tiler/v4/{id}/{z}/{x}/{y}?file={{ file }}', {
+    L.tileLayer('http://ec2-34-207-251-152.compute-1.amazonaws.com:8000/tiler/v4/{id}/{z}/{x}/{y}?file={{ file }}', {
         maxZoom: 13,
         minZoom: 1,
         id: 'mapbox.streets',
