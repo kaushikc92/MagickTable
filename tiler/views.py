@@ -157,17 +157,19 @@ def adjust_subtable_images(csv_name, number_of_subtables):
             if img2.shape[0] < diff:
                 number_of_subtables = number_of_subtables - 1
                 subtable_number = subtable_number + 1
-                img = np.zeros((img1.shape[0] + img2.shape[0], img1.shape[1], 3), dtype=np.uint8)
+                img_width = max(img1.shape[1], img2.shape[2])
+                img = np.full((img1.shape[0] + img2.shape[0], img_width, 3), 255, dtype=np.uint8)
                 img[0:img1.shape[0],0:img1.shape[1]] = img1
-                img[img1.shape[0]: img1.shape[0] + img2.shape[0], 0:img1.shape[1]] = img2
-                img = pad_img(img, tile_size * number_of_rows, img.shape[1])
+                img[img1.shape[0]: img1.shape[0] + img2.shape[0], 0:img2.shape[1]] = img2
+                img = pad_img(img, tile_size * number_of_rows, img_width)
             else:
                 diff_img = img2[0 : diff, 0: img2.shape[1]]
                 img2 = img2[diff: img2.shape[0], 0 : img2.shape[1]]
                 cv2.imwrite(img2_path, img2, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-                img = np.zeros((tile_size * number_of_rows, img1.shape[1], 3), dtype=np.uint8)
+                img_width = max(img1.shape[1], diff_img.shape[1])
+                img = np.full((tile_size * number_of_rows, img_width, 3), 255, dtype=np.uint8)
                 img[0:img1.shape[0],0:img1.shape[1]] = img1
-                img[img1.shape[0]: img1.shape[0] + diff, 0:img1.shape[1]] = diff_img
+                img[img1.shape[0]: img1.shape[0] + diff, 0:diff_img.shape[1]] = diff_img
             img1 = img
             if img1.shape[1] % tile_size != 0:
                 img1 = pad_img(img1, img1.shape[0], tile_size * number_of_cols)
