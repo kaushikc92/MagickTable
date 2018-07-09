@@ -1,15 +1,16 @@
 import math
-import multiprocessing
 import os
+import threading
 
 import imgkit
 import pandas as pd
 import pandas_profiling as pf
 from PIL import Image
 from django.conf import settings
-from django.db.models import F
+from django.db.models import F, Sum, Max
 from django.http import HttpResponse
 from django.utils.cache import add_never_cache_headers
+from django.core.exceptions import ObjectDoesNotExist
 
 from convertoimg.converttoimg import slice_image
 from tiler.models.Document import TiledDocument
@@ -20,35 +21,7 @@ import numpy as np
 def index(request):
     return HttpResponse("Index page of tiler")
 
-
-rows_per_image = 500
-
-# todo: this is got from what leaflet sends as x & y
-# TODO: This changes for every Zoom level!
-# start_x = 4091
-# start_y = 2722
-
-# According to mapbox: for a point on increasing zoom level x, y double
-# => 1,2 at zoom level 3 is 2,4 at zoom level 4
-start_z = 3
-start_x = {10: 4096, 9: 2048, 11: 8184, 8: 1024, 7: 512, 6: 256, 5: 128, 4: 64, 3: 32, 2: 16, 1: 8}
-start_y = {10: 4096, 9: 2048, 11: 5447, 8: 1024, 7: 512, 6: 256, 5: 128, 4: 64, 3: 32, 2: 16, 1: 8}
-
-# 8 1020,680
-# 7 508, 338
-# 6  252 , 168
-# 5 124,83
-# 4 60,40
-# 3 28,19
-# 2
-# 1
-
-# TODO: Find correct value. multiprocessing.cpu_count()-1 as a heuristic
-multiprocessing_limit = multiprocessing.cpu_count() - 1
-
-# TODO: change this based on zoom level
-max_chars_per_column = 40
-
+rows_per_image = 300
 
 # this is the function that will return a tile based on x, y, z
 # TODO try different image formats
@@ -57,27 +30,38 @@ max_chars_per_column = 40
 # TODO mapbox uses 256 by 256 squares: so we need to pad our generated image to fit that
 def tile_request(request, id, z, x, y):
     file_name = request.GET.get("file")
-    z = int(z) - start_z
+    z = int(z) - 3
+    
     print("{0},{1} zoom {2}".format(x, y, z))
-    #return empty_response()
-    # if int(z) < 0 or int(z) > 10:
-    #     return empty_response()
-    #x = int(x) - start_x.get(z)
-    #y = int(y) - start_y.get(z)
+    
     x = int(x)
     y = int(y)
     if x < 0 or y < 0:
         return empty_response()
-    #x = int(math.fabs(x))
-    #y = int(math.fabs(y))
 
-    tiled_document = TiledDocument.objects.get(document__file_name=file_name, zoom_level=z)
-    i = coordinate(x, y, tiled_document.tile_count_on_x)
-    if int(i) > tiled_document.total_tile_count or int(x) >= tiled_document.tile_count_on_x or \
-            int(y) >= tiled_document.tile_count_on_y:
+    if y > TiledDocument.objects.filter(document__file_name=file_name, zoom_level=z).aggregate(Sum('tile_count_on_y'))['tile_count_on_y__sum']:
         return empty_response()
 
-    path = os.path.join(settings.MEDIA_ROOT, 'tiles', str(z), file_name + i + ".jpg");
+    tile_details = TiledDocument.objects.filter(document__file_name=file_name, zoom_level=z).order_by('subtable_number')
+
+    subtable_number = 0
+    agg_rows = 0
+    for i in range(0, len(tile_details)):
+        agg_rows = agg_rows + tile_details[i].tile_count_on_y
+        if y < agg_rows:
+            subtable_number = i
+            y = y + tile_details[i].tile_count_on_y - agg_rows
+            break
+        if i == len(tile_details) - 1:
+            return empty_response()
+    
+    tile_count_on_x = tile_details[subtable_number].tile_count_on_x
+    if x >= tile_count_on_x:
+        return empty_response()
+
+    tile_count = x + tile_count_on_x * y
+
+    path = os.path.join(settings.MEDIA_ROOT, 'tiles', str(z), str(subtable_number), file_name + str(tile_count).zfill(5).replace("-", "0") + ".jpg")
 
     print(path)
 
@@ -118,20 +102,40 @@ def get_style_for_zoom_level(zoom_level):
 def convert_html(document, csv_name):
     csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
     total_row_count = csv.shape[0]
-
-    for zoom_level in range(6,11):
-        tiled_document = TiledDocument(document=document, tile_count_on_x=0, tile_count_on_y=0,
-                                   total_tile_count=0, profile_file_name=csv_name[:-4] + ".html", zoom_level=zoom_level)
-        tiled_document.save()
-    
     number_of_subtables = math.ceil(total_row_count / rows_per_image)
 
-    for subtable_number in range(0, number_of_subtables):
-        df = csv[subtable_number * rows_per_image: (subtable_number * rows_per_image) + rows_per_image]
-        convert_subtable_html(df, csv_name, subtable_number=subtable_number)
+    df = csv[0 : rows_per_image]
+    convert_subtable_html(df, csv_name, 0)
+    
+    if number_of_subtables > 1:
+        df = csv[rows_per_image : 2 * rows_per_image]
+        convert_subtable_html(df, csv_name, 1)
+    
+    add_subtable_entry(document, csv_name, 0)
+    create_tiles(csv_name, 0, 10)
 
-    number_of_subtables = adjust_subtable_images(csv_name, number_of_subtables)
-    create_tiles(csv_name, number_of_subtables)
+    t = threading.Thread(target=convert_remaining_html, args=(document, csv_name, csv, number_of_subtables))
+    t.start()
+
+def convert_remaining_html(document, csv_name, csv, number_of_subtables):
+    threads = []
+    if number_of_subtables > 2:
+        for subtable_number in range(2, number_of_subtables):
+            df = csv[subtable_number * rows_per_image: (subtable_number * rows_per_image) + rows_per_image]
+            t = threading.Thread(target=convert_subtable_html, args=(df, csv_name, subtable_number))
+            threads.append(t)
+            t.start()
+
+    for t in threads:
+        t.join()
+
+    for subtable_number in range(1, number_of_subtables):
+        add_subtable_entry(document, csv_name, subtable_number)
+
+    for subtable_number in range(0, number_of_subtables):
+        for zoom_level in range(6, 11):
+            t = threading.Thread(target=create_tiles, args=(csv_name, subtable_number, zoom_level))
+            t.start()
 
 def convert_subtable_html(df, csv_name, subtable_number):
     pd.set_option('max_colwidth', 40)
@@ -139,74 +143,113 @@ def convert_subtable_html(df, csv_name, subtable_number):
     html = df.style.set_table_styles(get_style_for_zoom_level(10)).hide_index().render()
     imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg'))
 
-def adjust_subtable_images(csv_name, number_of_subtables):
-    subtable_number = 0
-    nst = number_of_subtables
-    while subtable_number < nst:
-        img1_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg')
-        img1 = cv2.imread(img1_path)
-        tile_size = 2 ** (18 - 6)
-        number_of_rows = int(math.ceil(img1.shape[0] / (tile_size * 1.0)))
-        number_of_cols = int(math.ceil(img1.shape[1] / (tile_size * 1.0)))
-        if subtable_number == nst - 1:
-            img1 = pad_img(img1, tile_size * number_of_rows, tile_size * number_of_cols)
-        else:
-            img2_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number + 1) + '.jpg')
-            img2 = cv2.imread(img2_path)
-            diff = tile_size * number_of_rows - img1.shape[0]
-            if img2.shape[0] < diff:
-                number_of_subtables = number_of_subtables - 1
-                subtable_number = subtable_number + 1
-                img_width = max(img1.shape[1], img2.shape[2])
-                img = np.full((img1.shape[0] + img2.shape[0], img_width, 3), 255, dtype=np.uint8)
-                img[0:img1.shape[0],0:img1.shape[1]] = img1
-                img[img1.shape[0]: img1.shape[0] + img2.shape[0], 0:img2.shape[1]] = img2
-                img = pad_img(img, tile_size * number_of_rows, img_width)
-            else:
-                diff_img = img2[0 : diff, 0: img2.shape[1]]
-                img2 = img2[diff: img2.shape[0], 0 : img2.shape[1]]
-                cv2.imwrite(img2_path, img2, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-                img_width = max(img1.shape[1], diff_img.shape[1])
-                img = np.full((tile_size * number_of_rows, img_width, 3), 255, dtype=np.uint8)
-                img[0:img1.shape[0],0:img1.shape[1]] = img1
-                img[img1.shape[0]: img1.shape[0] + diff, 0:diff_img.shape[1]] = diff_img
-            img1 = img
-            if img1.shape[1] % tile_size != 0:
-                img1 = pad_img(img1, img1.shape[0], tile_size * number_of_cols)
-        cv2.imwrite(img1_path, img1, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+def add_subtable_entry(document, csv_name, subtable_number):
+    if subtable_number == 0:
+        img_no = 0
+        end_row_pix = 0
+    else:
+        td1 = TiledDocument.objects.get(document__file_name=csv_name, subtable_number=subtable_number-1, zoom_level=6)
+        #if not td1:
+        #    adjust_subtable(csv_name, subtable_number - 1)
+        #    td1 = TiledDocument.objects.get(document__file_name=csv_name, zoom_level=6, subtable_number=subtable_number-1)
+        img_no = td1.end_image
+        end_row_pix = td1.end_row
 
-        subtable_number = subtable_number + 1
+    img1_path = os.path.join(settings.MEDIA_ROOT, 'documents', csv_name + str(img_no) + '.jpg')
+    img1 = cv2.imread(img1_path)
 
-    return number_of_subtables
+    if end_row_pix == img1.shape[0]:
+        return
 
-def create_tiles(csv_name, number_of_subtables):
-    for subtable_number in range(0, number_of_subtables):
-        for zoom_level in range(6,11):
-            img_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg')
-            img = cv2.imread(img_path)
-            tile_size = 2 ** (18 - zoom_level)
-            number_of_rows = int(math.ceil(img.shape[0] / (tile_size * 1.0)))
-            number_of_cols = int(math.ceil(img.shape[1] / (tile_size * 1.0)))
+    max_tile_size = 2 ** 12
+    number_of_rows = int(math.ceil((img1.shape[0] - end_row_pix) / (max_tile_size * 1.0)))
+    number_of_cols = int(math.ceil(img1.shape[1] / (max_tile_size * 1.0)))
 
-            tiled_document = TiledDocument.objects.get(document__file_name=csv_name, zoom_level=zoom_level)
-            tile_count = tiled_document.total_tile_count
-            tiled_document.tile_count_on_y = F('tile_count_on_y') + number_of_rows
-            tiled_document.zoom_level = zoom_level
-            if tiled_document.tile_count_on_x == 0:
-                tiled_document.tile_count_on_x = number_of_cols
-            tiled_document.total_tile_count = F('total_tile_count') + number_of_rows * number_of_cols
-            tiled_document.save()
+    diff = max_tile_size * number_of_rows - img1.shape[0] + end_row_pix
+    img2_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(img_no + 1) + '.jpg')
+    img2 = cv2.imread(img2_path)
+
+    if img2 is None:
+        for zoom_level in range(6, 11):
+            td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
+                                end_image=img_no, end_row=img1.shape[0], tile_count_on_x=0, tile_count_on_y=0,
+                                total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+            td2.save()
+    elif img2.shape[0] < diff:
+        for zoom_level in range(6, 11):
+            td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
+                                end_image=img_no+1, end_row=img2.shape[0], tile_count_on_x=0, tile_count_on_y=0,
+                                total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+            td2.save()
             
-            for i in range(0, number_of_rows):
-                for j in range(0, number_of_cols):
-                    cropped_img = img[i * tile_size : (i+1) * tile_size, j * tile_size : (j+1) * tile_size]
-                    tile_path = os.path.join(settings.MEDIA_ROOT, 'tiles', str(zoom_level),
-                                                csv_name + str(tile_count).zfill(5).replace("-", "0") + ".jpg")
-                    cropped_img = cv2.resize(cropped_img, (256, 256))
-                    cv2.imwrite(tile_path, cropped_img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-                    tile_count = tile_count + 1
-            
-            print("Subtable {0}, Level {1} done".format(subtable_number, zoom_level))
+    else:
+        for zoom_level in range(6, 11):
+            td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
+                                end_image=img_no+1, end_row=diff, tile_count_on_x=0, tile_count_on_y=0,
+                                total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+            td2.save()
+
+def create_tiles(csv_name, subtable_number, zoom_level):
+    if subtable_number == 0:
+        img1_no = 0
+        img1_end_px = 0
+    else:
+        td1 = TiledDocument.objects.get(document__file_name=csv_name, subtable_number=subtable_number-1,
+                                        zoom_level=zoom_level)
+        img1_end_px = td1.end_row
+        img1_no = td1.end_image
+
+    try:
+        td2 = TiledDocument.objects.get(document__file_name=csv_name, subtable_number=subtable_number, zoom_level=zoom_level)
+    except ObjectDoesNotExist:
+        return
+    img2_no = td2.end_image
+    img2_end_px = td2.end_row
+
+    img1_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(img1_no) + '.jpg')
+    img1 = cv2.imread(img1_path)
+
+    if img1_no == img2_no:
+        img = img1[img1_end_px : img1.shape[0], :]
+    else:
+        img2_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(img2_no) + '.jpg')
+        img2 = cv2.imread(img2_path)
+
+        img = np.full((img1.shape[0] - img1_end_px + img2_end_px, max(img1.shape[1], img2.shape[1]), 3), 
+                        255, dtype=np.uint8)
+
+        img[0:img1.shape[0]-img1_end_px, 0:img1.shape[1]] = img1[img1_end_px:img1.shape[0], 0:img1.shape[1]]
+        img[img1.shape[0]-img1_end_px:img.shape[0],0:img2.shape[1]] = img2[0:img2_end_px, 0:img2.shape[1]]
+
+    tile_size = 2 ** (18 - zoom_level)
+    number_of_rows = int(math.ceil(img.shape[0] / (tile_size * 1.0)))
+    number_of_cols = int(math.ceil(img.shape[1] / (tile_size * 1.0)))
+
+    if img.shape[1] % tile_size != 0 or img.shape[0] % tile_size != 0:
+        img = pad_img(img, tile_size * number_of_rows, tile_size * number_of_cols)
+
+    tiled_document = TiledDocument.objects.get(document__file_name=csv_name, subtable_number=subtable_number, zoom_level=zoom_level)
+    tiled_document.tile_count_on_y = number_of_rows
+    tiled_document.zoom_level = zoom_level
+    tiled_document.subtable_number = subtable_number
+    tiled_document.tile_count_on_x = number_of_cols
+    tiled_document.save()
+
+    tile_count = 0
+
+    tile_dir = os.path.join(settings.MEDIA_ROOT, 'tiles', str(zoom_level), str(subtable_number))
+    if not os.path.exists(tile_dir):
+        os.makedirs(tile_dir)
+
+    for i in range(0, number_of_rows):
+        for j in range(0, number_of_cols):
+            cropped_img = img[i * tile_size : (i+1) * tile_size, j * tile_size : (j+1) * tile_size]
+            tile_path = os.path.join(tile_dir, csv_name + str(tile_count).zfill(5).replace("-", "0") + ".jpg")
+            cropped_img = cv2.resize(cropped_img, (256, 256))
+            cv2.imwrite(tile_path, cropped_img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            tile_count = tile_count + 1
+    
+    print("Subtable {0}, Level {1} done".format(subtable_number, zoom_level))
 
 def pad_img(img, h, w):
     height, width, channels = img.shape
