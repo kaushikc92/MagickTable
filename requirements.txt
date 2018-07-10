@@ -2,6 +2,5 @@ django
 pandas
 imgkit
 pillow
-opencv-python
 pandas_profiling
 

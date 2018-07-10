@@ -15,7 +15,6 @@ from django.core.exceptions import ObjectDoesNotExist
 from convertoimg.converttoimg import slice_image
 from tiler.models.Document import TiledDocument
 import pdb
-import cv2
 import numpy as np
 
 def index(request):
@@ -138,7 +137,7 @@ def convert_remaining_html(document, csv_name, csv, number_of_subtables):
             t.start()
 
 def convert_subtable_html(df, csv_name, subtable_number):
-    pd.set_option('max_colwidth', 40)
+    pd.set_option('max_colwidth', 100)
     df = df.astype(str)
     html = df.style.set_table_styles(get_style_for_zoom_level(10)).hide_index().render()
     imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg'))
@@ -149,43 +148,43 @@ def add_subtable_entry(document, csv_name, subtable_number):
         end_row_pix = 0
     else:
         td1 = TiledDocument.objects.get(document__file_name=csv_name, subtable_number=subtable_number-1, zoom_level=6)
-        #if not td1:
-        #    adjust_subtable(csv_name, subtable_number - 1)
-        #    td1 = TiledDocument.objects.get(document__file_name=csv_name, zoom_level=6, subtable_number=subtable_number-1)
         img_no = td1.end_image
         end_row_pix = td1.end_row
 
     img1_path = os.path.join(settings.MEDIA_ROOT, 'documents', csv_name + str(img_no) + '.jpg')
-    img1 = cv2.imread(img1_path)
+    img1 = Image.open(img1_path)
+    w1, h1 = img1.size
 
-    if end_row_pix == img1.shape[0]:
+    if end_row_pix == h1:
         return
 
     max_tile_size = 2 ** 12
-    number_of_rows = int(math.ceil((img1.shape[0] - end_row_pix) / (max_tile_size * 1.0)))
-    number_of_cols = int(math.ceil(img1.shape[1] / (max_tile_size * 1.0)))
+    number_of_rows = int(math.ceil((h1 - end_row_pix) / (max_tile_size * 1.0)))
+    number_of_cols = int(math.ceil(w1 / (max_tile_size * 1.0)))
 
-    diff = max_tile_size * number_of_rows - img1.shape[0] + end_row_pix
+    diff = max_tile_size * number_of_rows - h1 + end_row_pix
     img2_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(img_no + 1) + '.jpg')
-    img2 = cv2.imread(img2_path)
+    
+    if os.path.isfile(img2_path):
+        img2 = Image.open(img2_path)
+        w2, h2 = img2.size
+        if h2 < diff:
+            for zoom_level in range(6, 11):
+                td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
+                                    end_image=img_no+1, end_row=h2, tile_count_on_x=0, tile_count_on_y=0,
+                                    total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+                td2.save()
+        else:
+            for zoom_level in range(6, 11):
+                td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
+                                    end_image=img_no+1, end_row=diff, tile_count_on_x=0, tile_count_on_y=0,
+                                    total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+                td2.save()
 
-    if img2 is None:
-        for zoom_level in range(6, 11):
-            td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
-                                end_image=img_no, end_row=img1.shape[0], tile_count_on_x=0, tile_count_on_y=0,
-                                total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
-            td2.save()
-    elif img2.shape[0] < diff:
-        for zoom_level in range(6, 11):
-            td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
-                                end_image=img_no+1, end_row=img2.shape[0], tile_count_on_x=0, tile_count_on_y=0,
-                                total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
-            td2.save()
-            
     else:
         for zoom_level in range(6, 11):
             td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
-                                end_image=img_no+1, end_row=diff, tile_count_on_x=0, tile_count_on_y=0,
+                                end_image=img_no, end_row=h1, tile_count_on_x=0, tile_count_on_y=0,
                                 total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
             td2.save()
 
@@ -207,13 +206,13 @@ def create_tiles(csv_name, subtable_number, zoom_level):
     img2_end_px = td2.end_row
 
     img1_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(img1_no) + '.jpg')
-    img1 = cv2.imread(img1_path)
+    img1 = np.array(Image.open(img1_path))
 
     if img1_no == img2_no:
         img = img1[img1_end_px : img1.shape[0], :]
     else:
         img2_path = os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(img2_no) + '.jpg')
-        img2 = cv2.imread(img2_path)
+        img2 = np.array(Image.open(img2_path))
 
         img = np.full((img1.shape[0] - img1_end_px + img2_end_px, max(img1.shape[1], img2.shape[1]), 3), 
                         255, dtype=np.uint8)
@@ -245,19 +244,18 @@ def create_tiles(csv_name, subtable_number, zoom_level):
         for j in range(0, number_of_cols):
             cropped_img = img[i * tile_size : (i+1) * tile_size, j * tile_size : (j+1) * tile_size]
             tile_path = os.path.join(tile_dir, csv_name + str(tile_count).zfill(5).replace("-", "0") + ".jpg")
-            cropped_img = cv2.resize(cropped_img, (256, 256))
-            cv2.imwrite(tile_path, cropped_img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            cropped_img = Image.fromarray(cropped_img)
+            cropped_img = cropped_img.resize((256, 256))
+            cropped_img.save(tile_path, 'jpeg', quality=90)
             tile_count = tile_count + 1
     
     print("Subtable {0}, Level {1} done".format(subtable_number, zoom_level))
 
 def pad_img(img, h, w):
     height, width, channels = img.shape
-    bottom_padding = h - height
-    right_padding = w - width
-    img = cv2.copyMakeBorder(img, top=0, bottom=bottom_padding, left=0, right=right_padding,
-        borderType=cv2.BORDER_CONSTANT, value=[221, 221, 221])
-    return img
+    new_img = np.full((h, w, channels), 221, dtype=np.uint8)
+    new_img[0:height, 0:width] = img
+    return new_img
 
 def empty_response():
     red = Image.new('RGBA', (1, 1), (255, 0, 0, 0))
