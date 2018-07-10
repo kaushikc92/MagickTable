@@ -12,7 +12,6 @@ from django.http import HttpResponse
 from django.utils.cache import add_never_cache_headers
 from django.core.exceptions import ObjectDoesNotExist
 
-from convertoimg.converttoimg import slice_image
 from tiler.models.Document import TiledDocument
 import pdb
 import numpy as np
