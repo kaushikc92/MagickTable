@@ -19,7 +19,8 @@ import numpy as np
 def index(request):
     return HttpResponse("Index page of tiler")
 
-rows_per_image = 300
+rows_per_image = 50
+max_chars_per_column = 2000
 
 # this is the function that will return a tile based on x, y, z
 # TODO try different image formats
@@ -73,54 +74,39 @@ def tile_request(request, id, z, x, y):
         red.save(response, "jpeg")
         return response
 
-
-# TODO: calculate this rather than hard code?
-font_sizes = {
-    0: 4,
-    1: 5.6,
-    2: 7.2,
-    3: 8.8,
-    4: 10,
-    5: 11.6,
-    6: 13.2,
-    7: 14.8,
-    8: 16,
-    9: 17.2,
-    10: 18.8}
-
-
-def get_style_for_zoom_level(zoom_level):
-    font_size = font_sizes.get(zoom_level)
-    return [{'selector': 'thead th',
-             'props': [('background-color', '#9cd4e2'), ('text-align', 'center'), ('font-family', 'Times New Roman'),
-                       ('font-size', str(font_size))]},
-            {'selector': 'tbody td',
-             'props': [('text-align', 'center'), ('font-family', 'Times New Roman'), ('font-size', str(font_size))]}]
-
 def convert_html(document, csv_name):
     csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
     total_row_count = csv.shape[0]
     number_of_subtables = math.ceil(total_row_count / rows_per_image)
 
+    csv = csv.astype(str).apply(lambda x: x.str[:max_chars_per_column])
+    chars_per_row = 0
+    for col in csv.columns:
+        max_len = csv[col].map(len).max()
+        if max_len > 70:
+            max_len = 70
+        chars_per_row = chars_per_row + max_len
+
+    max_width = chars_per_row * 5
     df = csv[0 : rows_per_image]
-    convert_subtable_html(df, csv_name, 0)
+    convert_subtable_html(df, csv_name, 0, max_width)
     
     if number_of_subtables > 1:
         df = csv[rows_per_image : 2 * rows_per_image]
-        convert_subtable_html(df, csv_name, 1)
+        convert_subtable_html(df, csv_name, 1, max_width)
     
     add_subtable_entry(document, csv_name, 0)
     create_tiles(csv_name, 0, 10)
 
-    t = threading.Thread(target=convert_remaining_html, args=(document, csv_name, csv, number_of_subtables))
+    t = threading.Thread(target=convert_remaining_html, args=(document, csv_name, csv, number_of_subtables, max_width))
     t.start()
 
-def convert_remaining_html(document, csv_name, csv, number_of_subtables):
+def convert_remaining_html(document, csv_name, csv, number_of_subtables, max_width):
     threads = []
     if number_of_subtables > 2:
         for subtable_number in range(2, number_of_subtables):
             df = csv[subtable_number * rows_per_image: (subtable_number * rows_per_image) + rows_per_image]
-            t = threading.Thread(target=convert_subtable_html, args=(df, csv_name, subtable_number))
+            t = threading.Thread(target=convert_subtable_html, args=(df, csv_name, subtable_number, max_width))
             threads.append(t)
             t.start()
 
@@ -135,11 +121,21 @@ def convert_remaining_html(document, csv_name, csv, number_of_subtables):
             t = threading.Thread(target=create_tiles, args=(csv_name, subtable_number, zoom_level))
             t.start()
 
-def convert_subtable_html(df, csv_name, subtable_number):
-    pd.set_option('max_colwidth', 100)
-    df = df.astype(str)
-    html = df.style.set_table_styles(get_style_for_zoom_level(10)).hide_index().render()
-    imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg'))
+def convert_subtable_html(df, csv_name, subtable_number, max_width):
+    pd.set_option('display.max_colwidth', -1)
+    html = df.to_html(index=False, border=0).replace('<td>', '<td style = "word-wrap: break-word;' + 
+        ' text-align:center; font-family: Times New Roman; font-size: 18;">')
+    html = html.replace('<th>', '<th style = "background-color: #9cd4e2; text-align: center;' + 
+        ' font-family: Times New Roman; font-size: 18;">')
+    html = html.replace('<table', '<div style="width:' + str(max_width) + 'px;">\n<table ' + 
+        'style="border-collapse: collapse;"')
+    html = html.replace('</table>', '</table>\n</div>')
+
+    options = {
+        'quality' : '60'
+    }
+    imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg'),
+                        options=options) 
 
 def add_subtable_entry(document, csv_name, subtable_number):
     if subtable_number == 0:
@@ -169,22 +165,31 @@ def add_subtable_entry(document, csv_name, subtable_number):
         w2, h2 = img2.size
         if h2 < diff:
             for zoom_level in range(6, 11):
+                tile_size = 2 ** (18 - zoom_level)
+                nr = int(math.ceil((h1 - end_row_pix + h2) / (tile_size * 1.0)))
+                nc = int(math.ceil(max(w1, w2) / (tile_size * 1.0)))
                 td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
-                                    end_image=img_no+1, end_row=h2, tile_count_on_x=0, tile_count_on_y=0,
-                                    total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+                                    end_image=img_no+1, end_row=h2, tile_count_on_x=nc, tile_count_on_y=nr,
+                                    total_tile_count=nc*nr, profile_file_name=csv_name[:-4] + ".html")
                 td2.save()
         else:
             for zoom_level in range(6, 11):
+                tile_size = 2 ** (18 - zoom_level)
+                nr = int(math.ceil((h1 - end_row_pix + diff) / (tile_size * 1.0)))
+                nc = int(math.ceil(max(w1, w2) / (tile_size * 1.0)))
                 td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
-                                    end_image=img_no+1, end_row=diff, tile_count_on_x=0, tile_count_on_y=0,
-                                    total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+                                    end_image=img_no+1, end_row=diff, tile_count_on_x=nc, tile_count_on_y=nr,
+                                    total_tile_count=nc*nr, profile_file_name=csv_name[:-4] + ".html")
                 td2.save()
 
     else:
         for zoom_level in range(6, 11):
+            tile_size = 2 ** (18 - zoom_level)
+            nr = int(math.ceil(h1 / (tile_size * 1.0)))
+            nc = int(math.ceil(w1 / (tile_size * 1.0)))
             td2 = TiledDocument(document=document, zoom_level=zoom_level, subtable_number=subtable_number,
-                                end_image=img_no, end_row=h1, tile_count_on_x=0, tile_count_on_y=0,
-                                total_tile_count=0, profile_file_name=csv_name[:-4] + ".html")
+                                end_image=img_no, end_row=h1, tile_count_on_x=nc, tile_count_on_y=nr,
+                                total_tile_count=nc*nr, profile_file_name=csv_name[:-4] + ".html")
             td2.save()
 
 def create_tiles(csv_name, subtable_number, zoom_level):
@@ -226,13 +231,6 @@ def create_tiles(csv_name, subtable_number, zoom_level):
     if img.shape[1] % tile_size != 0 or img.shape[0] % tile_size != 0:
         img = pad_img(img, tile_size * number_of_rows, tile_size * number_of_cols)
 
-    tiled_document = TiledDocument.objects.get(document__file_name=csv_name, subtable_number=subtable_number, zoom_level=zoom_level)
-    tiled_document.tile_count_on_y = number_of_rows
-    tiled_document.zoom_level = zoom_level
-    tiled_document.subtable_number = subtable_number
-    tiled_document.tile_count_on_x = number_of_cols
-    tiled_document.save()
-
     tile_count = 0
 
     tile_dir = os.path.join(settings.MEDIA_ROOT, 'tiles', str(zoom_level), str(subtable_number))
@@ -245,7 +243,7 @@ def create_tiles(csv_name, subtable_number, zoom_level):
             tile_path = os.path.join(tile_dir, csv_name + str(tile_count).zfill(5).replace("-", "0") + ".jpg")
             cropped_img = Image.fromarray(cropped_img)
             cropped_img = cropped_img.resize((256, 256))
-            cropped_img.save(tile_path, 'jpeg', quality=90)
+            cropped_img.save(tile_path, 'jpeg', quality=60)
             tile_count = tile_count + 1
     
     print("Subtable {0}, Level {1} done".format(subtable_number, zoom_level))
