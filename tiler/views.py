@@ -136,6 +136,7 @@ def convert_subtable_html(df, csv_name, subtable_number, max_width):
     }
     imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg'),
                         options=options) 
+    #img = imgkit.from_string(html, False)
 
 def add_subtable_entry(document, csv_name, subtable_number):
     if subtable_number == 0:
