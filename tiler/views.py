@@ -1,6 +1,8 @@
 import math
 import os
 import threading
+import multiprocessing as mp
+import time
 
 import imgkit
 import pandas as pd
@@ -19,7 +21,6 @@ import numpy as np
 def index(request):
     return HttpResponse("Index page of tiler")
 
-rows_per_image = 50
 max_chars_per_column = 2000
 
 # this is the function that will return a tile based on x, y, z
@@ -76,49 +77,64 @@ def tile_request(request, id, z, x, y):
 
 def convert_html(document, csv_name):
     csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
-    total_row_count = csv.shape[0]
-    number_of_subtables = math.ceil(total_row_count / rows_per_image)
-
     csv = csv.astype(str).apply(lambda x: x.str[:max_chars_per_column])
     chars_per_row = 0
+    max_lines_per_row = 1
     for col in csv.columns:
         max_len = csv[col].map(len).max()
-        if max_len > 70:
-            max_len = 70
+        if max_len > 50:
+            lines_per_row = math.ceil(max_len / 200)
+            max_lines_per_row = max(max_lines_per_row, lines_per_row)
+            max_len = 50
         chars_per_row = chars_per_row + max_len
 
     max_width = chars_per_row * 5
+    rows_per_image = math.ceil(400 / max_lines_per_row)
     df = csv[0 : rows_per_image]
     convert_subtable_html(df, csv_name, 0, max_width)
     
-    if number_of_subtables > 1:
+    if csv.shape[0] > rows_per_image:
         df = csv[rows_per_image : 2 * rows_per_image]
         convert_subtable_html(df, csv_name, 1, max_width)
     
     add_subtable_entry(document, csv_name, 0)
     create_tiles(csv_name, 0, 10)
 
-    t = threading.Thread(target=convert_remaining_html, args=(document, csv_name, csv, number_of_subtables, max_width))
+    t = threading.Thread(target=convert_remaining_html, args=(document, csv_name, csv, rows_per_image, max_width))
     t.start()
 
-def convert_remaining_html(document, csv_name, csv, number_of_subtables, max_width):
+def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width):
+    number_of_subtables = math.ceil(csv.shape[0] / rows_per_image)
     threads = []
     if number_of_subtables > 2:
         for subtable_number in range(2, number_of_subtables):
             df = csv[subtable_number * rows_per_image: (subtable_number * rows_per_image) + rows_per_image]
+            #with mp.Pool(processes=10) as pool:
+            #    pool.apply_async(convert_subtable_html, (df, csv_name, subtable_number, max_width))
+            #convert_subtable_html(df, csv_name, subtable_number, max_width)
             t = threading.Thread(target=convert_subtable_html, args=(df, csv_name, subtable_number, max_width))
             threads.append(t)
             t.start()
+            if subtable_number % 20 == 0:
+                for t in threads:
+                    t.join()
+                threads = []
 
     for t in threads:
         t.join()
-
     for subtable_number in range(1, number_of_subtables):
         add_subtable_entry(document, csv_name, subtable_number)
 
     for subtable_number in range(0, number_of_subtables):
+        if subtable_number % 5 == 0:
+            for t in threads:
+                t.join()
+            threads = []
         for zoom_level in range(6, 11):
+            #with mp.Pool(processes=20) as pool:
+            #    pool.apply_async(create_tiles, (csv_name, subtable_number, zoom_level))
             t = threading.Thread(target=create_tiles, args=(csv_name, subtable_number, zoom_level))
+            threads.append(t)
             t.start()
 
 def convert_subtable_html(df, csv_name, subtable_number, max_width):
@@ -134,9 +150,9 @@ def convert_subtable_html(df, csv_name, subtable_number, max_width):
     options = {
         'quality' : '60'
     }
+    #Image.open(io.BytesIO(imgkit.from_string(html, False, options=options))).size
     imgkit.from_string(html, os.path.join(settings.MEDIA_ROOT, "documents", csv_name + str(subtable_number) + '.jpg'),
                         options=options) 
-    #img = imgkit.from_string(html, False)
 
 def add_subtable_entry(document, csv_name, subtable_number):
     if subtable_number == 0:
