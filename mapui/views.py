@@ -6,8 +6,9 @@ from django.shortcuts import render
 
 from tiler.models.Document import Document
 from tiler.views import convert_html
+import pdb
 
-max_usage = 40
+max_usage = 25000
 
 def index(request):
     return HttpResponse("Hello, world. You're at the map ui index.")
@@ -39,7 +40,6 @@ def check_disk_usage():
         total_size = size + total_size
         csv_sizes[dir_name] = size
 
-    total_size = get_directory_size(os.path.join(settings.MEDIA_ROOT, 'tiles'))
     if total_size < max_usage:
         return
     accesses = {}
