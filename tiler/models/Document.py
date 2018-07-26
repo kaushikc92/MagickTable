@@ -5,6 +5,7 @@ class Document(models.Model):
     # TODO change this to username?
     file_name = models.CharField(max_length=200)
     docfile = models.FileField(upload_to='documents/')
+    last_access = models.DateTimeField(auto_now=True)
 
 
 class TiledDocument(models.Model):
