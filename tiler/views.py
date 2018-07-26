@@ -72,10 +72,11 @@ def tile_request(request, id, z, x, y):
         return response
 
 def convert_html(document, csv_name):
+    add_entries = not TiledDocument.objects.filter(document=document).exists()
     csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
     csv = csv.astype(str).apply(lambda x: x.str[:max_chars_per_column])
-
-	chars_per_row = 0
+    
+    chars_per_row = 0
     max_lines_per_row = 1
     for col in csv.columns:
         max_len = csv[col].map(len).max()
@@ -101,7 +102,8 @@ def convert_html(document, csv_name):
         img2 = convert_subtable_html(df, csv_name, 1, max_width)
     
     img, start_row = create_subtable_image(0, img1, img2, 0)
-    add_subtable_entries(document, csv_name, 0, [img])
+    if add_entries:
+        add_subtable_entries(document, csv_name, 0, [img])
     threads = []
 
     os.mkdir(os.path.join(settings.MEDIA_ROOT, 'tiles', csv_name[0:-4], '0'))
@@ -117,11 +119,10 @@ def convert_html(document, csv_name):
 
     if img2 is not None:
         t = threading.Thread(target=convert_remaining_html, args=(document, csv_name, csv, rows_per_image, max_width, 
-            img2, start_row))
+            img2, start_row, add_entries))
         t.start()
 
-def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, img2, start_row):
-    pdb.set_trace()
+def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, img2, start_row, add_entries):
     number_of_subtables = math.ceil(csv.shape[0] / rows_per_image)
     batch_size = 5
     no_of_batches = math.ceil(number_of_subtables / batch_size)
@@ -140,7 +141,8 @@ def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, i
             img, start_row = create_subtable_image(subtable_number, img1, img2, start_row)
             subtable_images.append(img)
 
-        add_subtable_entries(document, csv_name, batch_size*i, subtable_images)
+        if add_entries:
+            add_subtable_entries(document, csv_name, batch_size*i, subtable_images)
         
         for j,img in enumerate(subtable_images):
             subtable_number = batch_size * i + j + 1
@@ -154,7 +156,7 @@ def convert_subtable_html(df, csv_name, subtable_number, max_width):
     if df.shape[0] == 0:
         return None
     pd.set_option('display.max_colwidth', -1)
-    html = df.to_html(index=False, border=0).replace('<td>', '<td style = "word-wrap: break-word;' + 
+    html = df.to_html(index=False, border=1).replace('<td>', '<td style = "word-wrap: break-word;' + 
         ' text-align:center; font-family: Times New Roman; font-size: 18;">')
     html = html.replace('<th>', '<th style = "background-color: #9cd4e2; text-align: center;' + 
         ' font-family: Times New Roman; font-size: 18;">')
