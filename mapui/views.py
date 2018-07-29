@@ -32,7 +32,6 @@ def check_csv(file_name):
     convert_html(doc, file_name)
 
 def check_disk_usage():
-    pdb.set_trace()
     csv_sizes = {}
     total_size = 0
     for dir_name in os.listdir(os.path.join(settings.MEDIA_ROOT, 'tiles')):
