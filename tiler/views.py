@@ -1,4 +1,5 @@
 import math
+import queue
 import os
 import threading
 import time
@@ -175,7 +176,8 @@ def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, i
             keys = st_images.keys()
             if len(keys) < st_images_max:
                 st_images[subtable_name] = pil_img
-            pil_img.save(subtable_path, 'jpeg', quality=60)
+            t = threading.Thread(target=write_subtable_image, args=(pil_img, subtable_path))
+            t.start()
 
         if add_entries:
             add_subtable_entries(document, csv_name, batch_size*i, subtable_images)
@@ -231,6 +233,9 @@ def create_subtable_image(img1, img2, start_row):
             img = pad_img(img, max_tile_size * number_of_rows, max_tile_size * number_of_cols)
             return img, diff
 
+def write_subtable_image(pil_img, subtable_path):
+    pil_img.save(subtable_path, 'jpeg', quality=60)
+
 def add_subtable_entries(document, csv_name, start_st_no, images):
     entries = []
     for i, img in enumerate(images):
@@ -240,12 +245,6 @@ def add_subtable_entries(document, csv_name, start_st_no, images):
         entries.append(TiledDocument(document=document, subtable_number=start_st_no+i,
             tile_count_on_x=ncols, tile_count_on_y=nrows, total_tile_count=ncols*nrows))
 
-        #for zoom_level in range(6, 11):
-        #    tile_size = 2 ** (18 - zoom_level)
-        #    nrows = int(math.ceil(img.shape[0]/tile_size))  
-        #    ncols = int(math.ceil(img.shape[1]/tile_size))
-        #    entries.append(TiledDocument(document=document, zoom_level=zoom_level, subtable_number=start_st_no+i,
-        #        tile_count_on_x=ncols, tile_count_on_y=nrows, total_tile_count=ncols*nrows))
     TiledDocument.objects.bulk_create(entries)
 
 def get_tile(img, subtable_number, j, i, zoom_level):
