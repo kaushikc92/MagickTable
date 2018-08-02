@@ -142,6 +142,8 @@ def convert_html(document, csv_name):
             img2, start_row, add_entries))
         t.start()
 
+    return csv.shape[0], csv.shape[1]
+
 def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, img1, start_row, add_entries):
     number_of_subtables = math.ceil(csv.shape[0] / rows_per_image)
     batch_size = 10

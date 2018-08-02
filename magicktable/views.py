@@ -18,7 +18,8 @@ def list_files(request):
     if request.method == 'POST':
         form = DocumentForm(request.POST, request.FILES)
         if form.is_valid() and not file_exists_in_db(request.FILES['docfile'].name):
-            newdoc = Document(file_name=request.FILES['docfile'].name, docfile=request.FILES['docfile'])
+            newdoc = Document(file_name=request.FILES['docfile'].name, docfile=request.FILES['docfile'],
+                rows=0, columns=0)
             newdoc.save()
             return redirect('/map/leaflet?file=' + request.FILES['docfile'].name)
 

@@ -16,20 +16,25 @@ def index(request):
 def leaflet(request):
     file_name = request.GET.get("file")
 
-    check_csv(file_name)
+    rows, columns = check_csv(file_name)
 
     output_name = file_name[:-4] + ".html"
-    context = {'file': file_name, 'profile': output_name}
+    context = {'file': file_name, 'profile': output_name, 'rows': str(rows), 'columns': str(columns)}
     return render(request, 'leaflet_map.html', context)
 
 def check_csv(file_name):
-    if os.path.isdir(os.path.join(settings.MEDIA_ROOT, 'tiles', file_name[:-4])):
-        return
-    check_disk_usage()
     doc = Document.objects.get(file_name=file_name)
+    rows, columns = 0, 0
+    if not os.path.isdir(os.path.join(settings.MEDIA_ROOT, 'tiles', file_name[:-4])):
+        check_disk_usage()
+        rows, columns = convert_html(doc, file_name)
+        doc.rows = rows
+        doc.columns = columns
+    else:
+        rows = doc.rows
+        columns = doc.columns
     doc.save()
-
-    convert_html(doc, file_name)
+    return rows, columns
 
 def check_disk_usage():
     csv_sizes = {}
