@@ -24,6 +24,7 @@ max_chars_per_column = 2000
 st_images = {}
 st_images_max = 25
 cv = threading.Lock()
+write_q = queue.Queue()
 
 def index(request):
     return HttpResponse("Index page of tiler")
@@ -148,6 +149,14 @@ def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, i
     number_of_subtables = math.ceil(csv.shape[0] / rows_per_image)
     batch_size = 10
     no_of_batches = math.ceil(number_of_subtables / batch_size)
+    
+    num_write_threads = 10
+    write_threads = []
+    
+    for i in range(num_write_threads):
+        w = threading.Thread(target=worker)
+        w.start()
+        write_threads.append(w)
 
     for i in range(0, no_of_batches):
         converted_images = [None] * batch_size
@@ -178,11 +187,17 @@ def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, i
             keys = st_images.keys()
             if len(keys) < st_images_max:
                 st_images[subtable_name] = pil_img
-            t = threading.Thread(target=write_subtable_image, args=(pil_img, subtable_path))
-            t.start()
+            write_q.put((pil_img, subtable_path))
 
         if add_entries:
             add_subtable_entries(document, csv_name, batch_size*i, subtable_images)
+
+    write_q.join()
+
+    for i in range(num_write_threads):
+        write_q.put(None)
+    for w in write_threads:
+        w.join()
 
 def convert_subtable_html(df, csv_name, subtable_number, max_width, results=None):
     if df.shape[0] == 0:
@@ -237,6 +252,15 @@ def create_subtable_image(img1, img2, start_row):
 
 def write_subtable_image(pil_img, subtable_path):
     pil_img.save(subtable_path, 'jpeg', quality=60)
+    print("{0} written".format(subtable_path))
+
+def worker():
+    while True:
+        item = write_q.get()
+        if item is None:
+            break
+        write_subtable_image(item[0], item[1])
+        write_q.task_done()
 
 def add_subtable_entries(document, csv_name, start_st_no, images):
     entries = []
