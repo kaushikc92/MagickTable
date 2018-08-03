@@ -1,11 +1,13 @@
 import os, shutil
 
 from django.conf import settings
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
+from django.db.models import Sum
 
-from tiler.models.Document import Document
+from tiler.models.Document import Document, TiledDocument
 from tiler.views import convert_html
+import json
 import pdb
 
 max_usage = 25000
@@ -21,6 +23,11 @@ def leaflet(request):
     output_name = file_name[:-4] + ".html"
     context = {'file': file_name, 'profile': output_name, 'rows': str(rows), 'columns': str(columns)}
     return render(request, 'leaflet_map.html', context)
+
+def tilecount(request):
+    file_name = request.GET.get("file")
+    tilecount = TiledDocument.objects.filter(document__file_name=file_name).aggregate(Sum('tile_count_on_y'))['tile_count_on_y__sum']
+    return JsonResponse({'tilecount': tilecount})
 
 def check_csv(file_name):
     doc = Document.objects.get(file_name=file_name)

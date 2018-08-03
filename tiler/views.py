@@ -300,3 +300,8 @@ def empty_response():
     red.save(response, "png")
     return response
 
+def error_response():
+    red = Image.new('RGB', (256, 256), (255, 0, 0))
+    response = HttpResponse(content_type="image/jpg")
+    red.save(response, "jpeg")
+    return response
