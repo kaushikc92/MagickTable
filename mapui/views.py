@@ -33,7 +33,7 @@ def check_csv(file_name):
     doc = Document.objects.get(file_name=file_name)
     rows, columns = 0, 0
     if not os.path.isdir(os.path.join(settings.MEDIA_ROOT, 'tiles', file_name[:-4])):
-        check_disk_usage()
+        #check_disk_usage()
         rows, columns = convert_html(doc, file_name)
         doc.rows = rows
         doc.columns = columns

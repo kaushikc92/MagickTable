@@ -11,7 +11,7 @@ import pandas_profiling as pf
 from PIL import Image
 from django.conf import settings
 from django.db.models import F, Sum, Max
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.utils.cache import add_never_cache_headers
 from django.core.exceptions import ObjectDoesNotExist
 
@@ -25,6 +25,8 @@ st_images = {}
 st_images_max = 25
 cv = threading.Lock()
 write_q = queue.Queue()
+progressStatus = "Uploading File"
+progressValue = 10
 
 def index(request):
     return HttpResponse("Index page of tiler")
@@ -34,7 +36,7 @@ def tile_request(request, id, z, x, y):
     z = int(z) - 3
     
     print("{0},{1} zoom {2}".format(x, y, z))
-    
+
     x = int(x) * (2 ** (10 - z))
     y = int(y) * (2 ** (10 - z))
     if x < 0 or y < 0:
@@ -98,7 +100,14 @@ def tile_request(request, id, z, x, y):
         red.save(response, "jpeg")
         return response
 
+def progress(request):
+    return JsonResponse({'progressValue': progressValue, 'progressStatus': progressStatus})
+
 def convert_html(document, csv_name):
+    global progressValue
+    global progressStatus
+    progressValue = "25"
+    progressStatus = "Processing CSV"
     add_entries = not TiledDocument.objects.filter(document=document).exists()
     csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
     csv = csv.astype(str).apply(lambda x: x.str[:max_chars_per_column])
@@ -119,6 +128,9 @@ def convert_html(document, csv_name):
     os.mkdir(os.path.join(settings.MEDIA_ROOT, 'tiles', csv_name[0:-4]))
 
     df = csv[0 : rows_per_image]
+
+    progressValue = "50"
+    progressStatus = "Creating image for first " + str(rows_per_image) + "rows" 
     img1 = convert_subtable_html(df, csv_name, 0, max_width)
     
     img2 = None
@@ -126,15 +138,21 @@ def convert_html(document, csv_name):
         df = csv[rows_per_image : 2 * rows_per_image]
         img2 = convert_subtable_html(df, csv_name, 1, max_width)
     
+    progressValue = "80"
+    progressStatus = "Loading image into memory" 
     img, start_row = create_subtable_image(img1, img2, 0)
     pil_img = Image.fromarray(img)
-    subtable_name = csv_name[:-4] + '0.jpg'
-    subtable_path = os.path.join(settings.MEDIA_ROOT, 'tiles', csv_name[:-4], subtable_name)
-    pil_img.save(subtable_path, 'jpeg', quality=60)
     keys = st_images.keys()
+    subtable_name = csv_name[:-4] + '0.jpg'
     if len(keys) >= st_images_max:
         st_images.popitem()
     st_images[subtable_name] = pil_img
+    
+    progressValue = "90"
+    progressStatus = "Writing image to disk" 
+    subtable_path = os.path.join(settings.MEDIA_ROOT, 'tiles', csv_name[:-4], subtable_name)
+    pil_img.save(subtable_path, 'jpeg', quality=60)
+    
     if add_entries:
         add_subtable_entries(document, csv_name, 0, [img])
 
@@ -143,6 +161,8 @@ def convert_html(document, csv_name):
             img2, start_row, add_entries))
         t.start()
 
+    progressStatus = "Uploading File"
+    progressValue = 10
     return csv.shape[0], csv.shape[1]
 
 def convert_remaining_html(document, csv_name, csv, rows_per_image, max_width, img1, start_row, add_entries):

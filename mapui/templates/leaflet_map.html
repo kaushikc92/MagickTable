@@ -18,9 +18,9 @@
 
         #slider {
             position: absolute;
-            top: 50px;
+            top: 60px;
             right: 20px;
-            height: 500px;
+            height: 460px;
         }
 
         a {
@@ -57,8 +57,10 @@
 </head>
 <body>
 
-<div id="csv-stats">
-     {{ rows }} rows, {{ columns }} columns
+<div id="csv-stats" style>
+    <h3>
+     {{ file }}: {{ rows }} rows, {{ columns }} columns
+    </h3>
 </div>
 <div id="mapid"></div>
 <script>
@@ -66,7 +68,7 @@
     window_height = $( window ).height();
 
     map_width = window_width - 50;
-    map_height = window_height - 50;
+    map_height = window_height - 60;
 
     $("#mapid").css("width", map_width.toString() + "px")
     $("#mapid").css("height", map_height.toString() + "px")
