@@ -4,6 +4,8 @@ from django.conf import settings
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.db.models import Sum
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 
 from tiler.models.Document import Document, TiledDocument
 from tiler.views import convert_html
@@ -28,6 +30,15 @@ def tilecount(request):
     file_name = request.GET.get("file")
     tilecount = TiledDocument.objects.filter(document__file_name=file_name).aggregate(Sum('tile_count_on_y'))['tile_count_on_y__sum']
     return JsonResponse({'tilecount': tilecount})
+
+@method_decorator(csrf_exempt)
+def delete(request):
+    file_name = request.POST.get("file_name")
+    Document.objects.get(file_name=file_name).delete()
+
+    dir_name = file_name[0:-4]
+    shutil.rmtree(os.path.join(settings.MEDIA_ROOT, 'tiles', dir_name))
+    return HttpResponse("Success")
 
 def check_csv(file_name):
     doc = Document.objects.get(file_name=file_name)

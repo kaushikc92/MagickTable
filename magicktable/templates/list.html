@@ -46,6 +46,10 @@
                 $("#progress-text-small").text(data["progressStatus"]);
             });
         }
+        function deleteFile(file_name) {
+            $.post('/map/delete', {file_name: file_name});
+            $("." + file_name.slice(0, -4) + "-list-group-item").remove();
+        }
         function checkform() {
             var request = new XMLHttpRequest();
             request.open('GET', '/fileexists', false);  // `false` makes the request synchronous
@@ -76,12 +80,9 @@
         {% if documents %}
         <div class="list-group">
             {% for document in documents %}
-            <!-- <a href="/map/leaflet?file={{ document.file_name }}" class="list-group-item list-group-item-action">
-                {{ document.file_name }}
-            </a> -->
-            <div class="list-group-item">
+            <div class="list-group-item {{ document.file_name|slice:"0:-4" }}-list-group-item">
                 <a style="color: black;" href="/map/leaflet?file={{ document.file_name }}">{{ document.file_name }}</a>
-                <a style="color: red;" href="#" >
+                <a style="color: red;" href="javascript: deleteFile('{{ document.file_name }}')" >
                     <span style="float: right; padding-top: 5px;" class="oi oi-x"></span>
                 </a>
                 <a style="color: black;" href="{{ document.docfile.url }}" >
