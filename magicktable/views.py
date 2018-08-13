@@ -22,7 +22,6 @@ def list_files(request):
                 rows=0, columns=0)
             newdoc.save()
             return redirect('/map/leaflet?file=' + request.FILES['docfile'].name)
-
     else:
         form = DocumentForm()
 

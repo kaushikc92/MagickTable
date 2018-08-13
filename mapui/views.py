@@ -83,10 +83,3 @@ def get_directory_size(dir_path):
             total_size = total_size + os.path.getsize(fp)
 
     return total_size / (1024 * 1024)
-
-def table_profile(request):
-    file_name = request.GET.get("file")
-    file_name = file_name[:-4] + "html"
-    output_name = os.path.join(settings.MEDIA_ROOT, "documents", file_name)
-    str = open(output_name).read()
-    return HttpResponse(str)
