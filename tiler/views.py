@@ -31,20 +31,14 @@ progressValue = 10
 def index(request):
     return HttpResponse("Index page of tiler")
 
-def tile_request(request, id, z, x, y):
-    file_name = request.GET.get("file")
-    z = int(z) - 3
-    
-    print("{0},{1} zoom {2}".format(x, y, z))
-
-    x = int(x) * (2 ** (10 - z))
-    y = int(y) * (2 ** (10 - z))
+def bb_check(file_name, x, y):
     if x < 0 or y < 0:
         return empty_response()
 
     if y > TiledDocument.objects.filter(document__file_name=file_name).aggregate(Sum('tile_count_on_y'))['tile_count_on_y__sum']:
         return empty_response()
 
+def get_subtable_number(file_name, x, y, z):
     tile_details = TiledDocument.objects.filter(document__file_name=file_name).order_by('subtable_number')
 
     subtable_number = 0
@@ -62,7 +56,18 @@ def tile_request(request, id, z, x, y):
     if x >= tile_count_on_x:
         return empty_response()
 
-    tile_count = x + tile_count_on_x * y
+    return subtable_number
+    
+
+def tile_request(request, id, z, x, y):
+    file_name = request.GET.get("file")
+    z = int(z) - 3
+    
+    x = int(x) * (2 ** (10 - z))
+    y = int(y) * (2 ** (10 - z))
+
+    bb_check(file_name, x, y)
+    subtable_number = get_subtable_number(file_name, x, y, z)
 
     subtable_name = file_name[:-4] + str(subtable_number) + '.jpg'
 
@@ -103,15 +108,7 @@ def tile_request(request, id, z, x, y):
 def progress(request):
     return JsonResponse({'progressValue': progressValue, 'progressStatus': progressStatus})
 
-def convert_html(document, csv_name):
-    global progressValue
-    global progressStatus
-    progressValue = "25"
-    progressStatus = "Processing CSV"
-    add_entries = not TiledDocument.objects.filter(document=document).exists()
-    csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
-    csv = csv.astype(str).apply(lambda x: x.str[:max_chars_per_column])
-    
+def get_subtable_dimensions(csv):
     chars_per_row = 0
     max_lines_per_row = 1
     for col in csv.columns:
@@ -124,6 +121,18 @@ def convert_html(document, csv_name):
 
     max_width = chars_per_row * 5
     rows_per_image = math.ceil(400 / max_lines_per_row)
+    return rows_per_image, max_width
+
+def convert_html(document, csv_name):
+    global progressValue
+    global progressStatus
+    progressValue = "25"
+    progressStatus = "Processing CSV"
+    add_entries = not TiledDocument.objects.filter(document=document).exists()
+    csv = pd.read_csv(os.path.join(settings.MEDIA_ROOT, "documents", csv_name))
+    csv = csv.astype(str).apply(lambda x: x.str[:max_chars_per_column])
+    
+    rows_per_image, max_width = get_subtable_dimensions(csv)
 
     os.mkdir(os.path.join(settings.MEDIA_ROOT, 'tiles', csv_name[0:-4]))
 
